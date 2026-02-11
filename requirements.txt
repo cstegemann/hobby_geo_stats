@@ -1,0 +1,5 @@
+numpy
+fiona
+geopandas
+pandas
+pydantic
