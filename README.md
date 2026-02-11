@@ -2,9 +2,7 @@
 ## Hobby project to dive into GIS with python
 >This is a hobby project, the code is provided without any claims as to its safety or usefulness. I made this public on github simply as an addon to my CV ; )
 
-This is a simple hobby project to extract data about a city from a gpkg and 
-classify area use split by administrative sub-levels. It was tested on osm-data 
-of a German federal state and will (so far) only work for similar types of data.
+This is a simple hobby project to load data from a .gpkg file (in this case an OSM dump, extract the specified city  and then classify how its area is used, split by administrative sub-levels. This was tested on the osm-dump of a German federal state and will (so far) only work for similar types of data due to hard coded CRS values and names of columns.
 
 
 ### Main learnings covered in this project
