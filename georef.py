@@ -16,6 +16,7 @@ import logging
 import os
 import json 
 from typing import Dict, Literal
+
 # =============================================================================
 # External Python modules
 # =============================================================================
@@ -23,6 +24,7 @@ import fiona
 import geopandas as gpd
 import pandas as pd
 from pydantic import BaseModel
+import rapidfuzz
 
 # =============================================================================
 # Extension modules
@@ -65,8 +67,6 @@ class GeoStat():
     structure supported is osm data
     - cache is only saved for the most recent step and overwrites data from 
     earlier steps, meaning I can only start from scratch or the last step
-    - if you have a typo in the place name it will just stop, wasting all the 
-    loading time...
     '''
     def __init__(self, path_in, processor):
         self.processor = processor
@@ -117,6 +117,8 @@ class GeoStat():
         all_mp_within_path = os.path.join(PATH_CACHE_DIR, f"{name}_all_mp_within.gpkg")
         return city_path, boundaries_within_path, all_mp_within_path
 
+    def fetch_boundaries_only(self):
+        return self.processor.fetch_boundaries_only(self.path_in)
 
     def extract_city(self, name, gdf):
         """This extracts, saves in self and caches as gpkg:
@@ -337,7 +339,26 @@ def main():
     args = parser.parse_args() # parses cmd-line args
     
     c = GeoStat(args.inputfile, ProcessorOSM())
+    names_to_levels = c.fetch_boundaries_only()
     city_name = input("Stadtname (wie in OSM, case sensitive): ").strip()
+    if city_name not in names_to_levels:
+        e = rapidfuzz.process.extract(
+                city_name, 
+                names_to_levels.keys(), 
+                scorer=rapidfuzz.fuzz.WRatio,
+                limit=2
+            )
+        ql = [x[0] for x in e]
+        print(f"unknown, maybe you meant one of these? {ql}")
+        q= 'n'
+        if e[0][1] > 80:
+            q = input(f"continue with {e[0][0]}? [Y/n]")
+        if q == 'n':
+            logging.error("unknown city, please rerun")
+            return 1
+        logging.info(f'going with {e[0][0]}')
+        city_name = e[0][0]
+
     cached_state = c.cache_get_state(city_name)
     #c._debug_print_layers()
     state_index = STATE_MAPPING.get(cached_state, 0)

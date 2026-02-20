@@ -13,6 +13,9 @@ python version 3.12
 # =============================================================================
 import logging
 from typing import Dict, Literal, override
+from collections import defaultdict
+import sqlite3
+
 # =============================================================================
 # External Python modules
 # =============================================================================
@@ -48,6 +51,9 @@ class AbstractProcessor:
         raise NotImplementedError("overwrite in implementing class")
 
     def is_admin_level_subcity(self, gdf_row):
+        raise NotImplementedError("overwrite in implementing class")
+
+    def fetch_boundaries_only(self, path_in, layers="multipolygons"):
         raise NotImplementedError("overwrite in implementing class")
 
 ### OSM Processor plus some look ups
@@ -142,4 +148,14 @@ class ProcessorOSM(AbstractProcessor):
         #    print(row)
         return "null"
 
-
+    def fetch_boundaries_only(self, path_in, layer="multipolygons"):
+        ret = defaultdict(list)
+        with sqlite3.connect(path_in) as con:
+            cur = con.cursor()
+            cur.execute("""
+                SELECT name, admin_level FROM multipolygons 
+                WHERE boundary='administrative'
+            """)
+            for r in cur.fetchall():
+                ret[r[0]].append(r[1])
+        return ret

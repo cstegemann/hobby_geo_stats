@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Open Project Vault
+Exec=obsidian "/home/christian/repos/hobby_geo_stats/.vnotes"
+Terminal=false
+Icon=obsidian

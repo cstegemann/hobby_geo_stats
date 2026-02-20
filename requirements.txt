@@ -3,3 +3,4 @@ fiona
 geopandas
 pandas
 pydantic
+rapidfuzz
