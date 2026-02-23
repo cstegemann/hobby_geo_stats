@@ -1,4 +1,6 @@
 # custom
+*.ods
+*.xlsx
 *.csv
 *.qgz
 *.gpkg

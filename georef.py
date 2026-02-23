@@ -102,6 +102,21 @@ class GeoStat():
         logging.debug(f"#rows: {len(gdf)}")
         return gdf
 
+    def get_gdf_sqlite(self, city_id, layer="multipolygons"):
+        logging.info("reading file using sqlite filtering")
+        boundaries = self.processor.within_boundary_rtree(self.path_in, city_id, layer)
+        id_list = ",".join(map(str, [x[0] for x in boundaries]))
+        logging.debug(f"len of prefilterd polygon list: {len(id_list)}")
+        gdf = gpd.read_file(
+                self.path_in, 
+                layer=layer,
+                engine="pyogrio",
+                where=f'"{self.processor.PK_COLUMN}" IN ({id_list})')
+        logging.debug(f"columns: {gdf.columns}")
+        logging.debug(f"CRS: {gdf.crs}")
+        logging.debug(f"#rows: {len(gdf)}")
+        return gdf
+
     def _set_state(self, state):
         self.cache_meta.cities[self.name].state = state
 
@@ -136,7 +151,7 @@ class GeoStat():
         candidates = known_admin_boundaries[known_admin_boundaries["name"] == name].copy()
         logging.info(f"found {len(candidates)} places with that name")
         if len(candidates)==0:
-            logging.error("{name} not found, exiting")
+            logging.error(f"{name} not found, exiting")
             exit()
         candidates_m = candidates.to_crs(25832)
         candidates["area_m2"] = candidates_m.area
@@ -146,14 +161,17 @@ class GeoStat():
         city_m = city.to_crs(25832)
         city_area = float(city_m.iloc[0]['area_m2'])
         logging.info(f"admin border (level {city_m.iloc[0]['admin_level']}) picked has area {city_area}")
+        self.processor.set_subcity_admin_level(known_admin_boundaries, city)
 
         ## get sub boundaries
 
         others = admin_m[admin_m.index != city_m.index[0]].copy()
+        logging.debug(f"sub-b_0: {len(others)}")
         bbox = city_m.total_bounds #minx miny maxx maxy
 
         others = others.cx[bbox[0]:bbox[2], bbox[1]:bbox[3]]
         boundaries_within = others[others.intersects(city_m.geometry.iloc[0])].copy()
+        logging.debug(f"sub-b_1: {len(boundaries_within)}")
         boundaries_within["area_m2"] = boundaries_within.area
         boundaries_within = boundaries_within[
                 (boundaries_within.centroid.within(city_m.geometry.iloc[0])) &
@@ -163,6 +181,7 @@ class GeoStat():
         logging.info(f"found {len(boundaries_within)} sub boundaries")
         if len(boundaries_within) == 0:
             logging.error("aborting, no sub boundaries")
+            exit()
 
         ## get all non-boundary multipolygons (mostly) within city limits
 
@@ -211,6 +230,7 @@ class GeoStat():
         self.city_m = gpd.read_file(mdc.filename_city)
         logging.info(f"admin border loaded has area {float(self.city_m.iloc[0]['area_m2'])}")
         self.boundaries_within = gpd.read_file(mdc.filename_boundaries_within)
+        self.processor.set_subcity_admin_level(self.boundaries_within, self.city_m)
         logging.info(f"loaded {len(self.boundaries_within)} sub boundaries")
         self.all_mp_within = gpd.read_file(mdc.filename_all_mp_within)
         logging.info(f"loaded {len(self.all_mp_within)} multipolygons within city boundaries")
@@ -339,12 +359,12 @@ def main():
     args = parser.parse_args() # parses cmd-line args
     
     c = GeoStat(args.inputfile, ProcessorOSM())
-    names_to_levels = c.fetch_boundaries_only()
+    names_to_levels_ids = c.fetch_boundaries_only()
     city_name = input("Stadtname (wie in OSM, case sensitive): ").strip()
-    if city_name not in names_to_levels:
+    if city_name not in names_to_levels_ids:
         e = rapidfuzz.process.extract(
                 city_name, 
-                names_to_levels.keys(), 
+                names_to_levels_ids.keys(), 
                 scorer=rapidfuzz.fuzz.WRatio,
                 limit=2
             )
@@ -359,13 +379,24 @@ def main():
         logging.info(f'going with {e[0][0]}')
         city_name = e[0][0]
 
+    city_id = None 
+    city_admin_level = None 
+    for t in names_to_levels_ids[city_name]:
+        if city_id is None or t[0] < city_admin_level:
+            city_admin_level, city_id = t
+    logging.info(f"admin_level of chosen boundary: {city_admin_level}")
+    if city_admin_level <= 6:
+        logging.warning("admin levels <= 6 can make for longer runtimes!")
+    if len(names_to_levels_ids[city_name]) > 1:
+        logging.info(f"there were several: {names_to_levels_ids[city_name]}")
     cached_state = c.cache_get_state(city_name)
     #c._debug_print_layers()
     state_index = STATE_MAPPING.get(cached_state, 0)
     if args.no_cache:
         state_index = 0
     if state_index < 1:
-        gdf = c.get_gdf()
+        gdf = c.get_gdf_sqlite(city_id=city_id)
+        #gdf = c.get_gdf()
         c.extract_city(city_name, gdf)
     else:
         c.load_cached_mp(city_name)

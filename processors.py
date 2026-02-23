@@ -13,7 +13,7 @@ python version 3.12
 # =============================================================================
 import logging
 from typing import Dict, Literal, override
-from collections import defaultdict
+from collections import defaultdict, Counter
 import sqlite3
 
 # =============================================================================
@@ -46,6 +46,54 @@ def has_value(v) -> bool:
         return False
     return True
 
+
+def within_boundary_rtree(gpkg_path, table, geom_col, pk_col, boundary_id, spatialite_path="mod_spatialite"):
+    """
+    gpkg_path: path to the .gpkg
+    table: the GeoPackage feature table name (often equals the layer name in Fiona/OGR, but not always)
+    geom_col: geometry column name (often geom, sometimes geometry)
+    pk_col: the primary key column in that table (often fid, id, etc.)
+    boundary_id: the pk value of the boundary feature row
+    spatialite_path: the name/path of the SpatiaLite extension shared library (depends on OS)
+
+    Returns: list[pk, name]
+    """
+    rtree = f'rtree_{table}_{geom_col}'  # common GPKG naming
+
+    con = sqlite3.connect(gpkg_path)
+    con.enable_load_extension(True)
+    con.load_extension(spatialite_path)
+    con.enable_load_extension(False)
+
+    con.execute("SELECT EnableGpkgAmphibiousMode()")
+
+    # WHERE {pk_col} = ? -> parameterized to let sqlite handle the type/ escaping etc
+    sql = f"""
+    WITH b AS (
+      SELECT
+        {geom_col} AS g,
+        MbrMinX({geom_col}) AS minx,
+        MbrMaxX({geom_col}) AS maxx,
+        MbrMinY({geom_col}) AS miny,
+        MbrMaxY({geom_col}) AS maxy
+      FROM "{table}"
+      WHERE {pk_col} = ?
+    )
+    SELECT t.{pk_col}, t.name
+    FROM "{table}" t
+    JOIN "{rtree}" r
+      ON r.id = t.{pk_col}
+    JOIN b
+    WHERE r.minx <= b.maxx AND r.maxx >= b.minx
+      AND r.miny <= b.maxy AND r.maxy >= b.miny
+      AND ST_CoveredBy(t.{geom_col}, b.g) = 1
+    """
+    rows = con.execute(sql, (boundary_id,)).fetchall()
+    con.close()
+    return rows
+
+
+
 class AbstractProcessor:
     def get_all_admin_boundaries(self, gdf):
         raise NotImplementedError("overwrite in implementing class")
@@ -64,18 +112,39 @@ OSM_GREEN_NATURAL = {"wood", "grassland", "heath", "scrub", "wetland"}
 OSM_GREEN_LEISURE = {"park", "garden", "nature_reserve"}
 
 class ProcessorOSM(AbstractProcessor):
+    PK_COLUMN="fid"
+    GEOM_COLUMN="geom"
+
     @override
     def get_all_admin_boundaries(self, gdf):
         return gdf[
             (gdf.get("boundary")=="administrative") &
             (gdf.get("name").notna())
         ].copy()
-    
+   
+    def set_subcity_admin_level(self, admin_boundaries_gdf, city_gdf):
+        self.base_admin_level = city_gdf.iloc[0]['admin_level']
+        valid = admin_boundaries_gdf[
+            admin_boundaries_gdf["admin_level"] > self.base_admin_level
+        ]
+        self.sub_admin_level = None
+        if not valid.empty:
+            c = Counter(valid.admin_level)
+            default = valid["admin_level"].min()
+            q = input(f"sub level counts: {c}, which should we use? [default:{default}]: ")
+            if q == '':
+                q = default
+            self.sub_admin_level = int(q)
+
+        logging.debug(f"setting sub admin level to {self.sub_admin_level}")
+        if self.sub_admin_level is None:
+            raise ValueError("cant determine sub_admin_level")
+
     @override
     def is_admin_level_subcity(self, gdf):
         # super ugly hack for now with string comparison, whatever - osm data 
         # is clean I hope...
-        return gdf['admin_level'].map(lambda x: str(x) == "10")
+        return gdf['admin_level'].map(lambda x: str(x) == str(self.sub_admin_level))
 
     @override
     def not_admin_boundary(self, gdf):
@@ -153,9 +222,20 @@ class ProcessorOSM(AbstractProcessor):
         with sqlite3.connect(path_in) as con:
             cur = con.cursor()
             cur.execute("""
-                SELECT name, admin_level FROM multipolygons 
+                SELECT name, admin_level, fid FROM multipolygons 
                 WHERE boundary='administrative'
             """)
             for r in cur.fetchall():
-                ret[r[0]].append(r[1])
+                ret[r[0]].append((r[1], r[2]))
         return ret
+
+    def within_boundary_rtree(self, path_in, city_id, layer="multipolygons") -> List[int, str]:
+        return within_boundary_rtree(
+                gpkg_path=path_in, 
+                table=layer, 
+                geom_col=self.GEOM_COLUMN, 
+                pk_col=self.PK_COLUMN, 
+                boundary_id=city_id,
+        )
+
+

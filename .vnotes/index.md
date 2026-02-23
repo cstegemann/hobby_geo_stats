@@ -15,4 +15,17 @@ with sqlite3.connect(gpkgfilepath) as con:
 Get columns for a layer (sqlite specific -> pragma)
 "SELECT name FROM pragma_table_info('multipolygons')"
 
+Additional Handy “discover the right names” snippets:
+
+**Geometry columns:**
+
+with sqlite3.connect("data.gpkg") as con:  
+    print(con.execute("SELECT table_name, column_name FROM gpkg_geometry_columns").fetchall())
+
+**Primary key column:**
+
+with sqlite3.connect("data.gpkg") as con:  
+    print(con.execute('PRAGMA table_info("multipolygons")').fetchall())
+
+
 Next todo: make loading quicker via sqlite stuff
